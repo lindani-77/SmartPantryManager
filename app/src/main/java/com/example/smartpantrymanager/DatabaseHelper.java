@@ -187,7 +187,6 @@ public class DatabaseHelper extends SQLiteOpenHelper {
 
     // ==================== PANTRY CRUD METHODS ====================
 
-    // 1. CREATE
     public boolean insertPantryItem(String name, double quantity, String unit, String expiryDate) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues values = new ContentValues();
@@ -200,13 +199,11 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return result != -1;
     }
 
-    // 2. READ (Get all items)
     public Cursor getAllPantryItemsCursor() {
         SQLiteDatabase db = this.getReadableDatabase();
         return db.rawQuery("SELECT * FROM " + TABLE_PANTRY, null);
     }
 
-    // 3. UPDATE
     public boolean updatePantryItem(int id, String name, double quantity, String unit, String expiryDate) {
         SQLiteDatabase db = this.getWritableDatabase();
         ContentValues values = new ContentValues();
@@ -219,10 +216,102 @@ public class DatabaseHelper extends SQLiteOpenHelper {
         return rowsAffected > 0;
     }
 
-    // 4. DELETE
     public boolean deletePantryItem(int id) {
         SQLiteDatabase db = this.getWritableDatabase();
         int rowsAffected = db.delete(TABLE_PANTRY, COLUMN_ID + " = ?", new String[]{String.valueOf(id)});
         return rowsAffected > 0;
+    }
+
+    // ==================== STRICT-MATCHING ALGORITHM ====================
+
+    public List<Recipe> getSuggestedRecipes() {
+        List<Recipe> suggestedRecipes = new ArrayList<>();
+        SQLiteDatabase db = this.getReadableDatabase();
+
+        List<PantryItem> pantryItems = new ArrayList<>();
+        Cursor pantryCursor = db.rawQuery("SELECT * FROM " + TABLE_PANTRY, null);
+        if (pantryCursor.moveToFirst()) {
+            do {
+                int id = pantryCursor.getInt(pantryCursor.getColumnIndexOrThrow("id"));
+                String name = pantryCursor.getString(pantryCursor.getColumnIndexOrThrow("name"));
+                double qty = pantryCursor.getDouble(pantryCursor.getColumnIndexOrThrow("quantity"));
+                String unit = pantryCursor.getString(pantryCursor.getColumnIndexOrThrow("unit"));
+                String expiry = pantryCursor.getString(pantryCursor.getColumnIndexOrThrow("expiry_date"));
+                pantryItems.add(new PantryItem(id, name, qty, unit, expiry));
+            } while (pantryCursor.moveToNext());
+        }
+        pantryCursor.close();
+
+        List<Recipe> allRecipes = new ArrayList<>();
+        Cursor recipeCursor = db.rawQuery("SELECT * FROM " + TABLE_RECIPES, null);
+        if (recipeCursor.moveToFirst()) {
+            do {
+                int id = recipeCursor.getInt(recipeCursor.getColumnIndexOrThrow("id"));
+                String name = recipeCursor.getString(recipeCursor.getColumnIndexOrThrow("name"));
+                String instructions = recipeCursor.getString(recipeCursor.getColumnIndexOrThrow("instructions"));
+                allRecipes.add(new Recipe(id, name, instructions));
+            } while (recipeCursor.moveToNext());
+        }
+        recipeCursor.close();
+
+        for (Recipe recipe : allRecipes) {
+            List<RecipeIngredient> requiredIngredients = getIngredientsForRecipe(db, recipe.getId());
+            boolean canMakeRecipe = true;
+
+            for (RecipeIngredient req : requiredIngredients) {
+                boolean foundMatch = false;
+
+                for (PantryItem pantry : pantryItems) {
+                    String normPantryName = normalizeString(pantry.getName());
+                    String normReqName = normalizeString(req.getIngredientName());
+
+                    if (normPantryName.equals(normReqName)) {
+                        if (pantry.getQuantity() >= req.getRequiredQuantity()) {
+                            foundMatch = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!foundMatch) {
+                    canMakeRecipe = false;
+                    break;
+                }
+            }
+
+            if (canMakeRecipe) {
+                suggestedRecipes.add(recipe);
+            }
+        }
+
+        return suggestedRecipes;
+    }
+
+    private String normalizeString(String input) {
+        if (input == null) return "";
+        String normalized = input.trim().toLowerCase();
+
+        if (normalized.endsWith("es")) {
+            normalized = normalized.substring(0, normalized.length() - 2);
+        } else if (normalized.endsWith("s") && !normalized.endsWith("ss")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private List<RecipeIngredient> getIngredientsForRecipe(SQLiteDatabase db, int recipeId) {
+        List<RecipeIngredient> list = new ArrayList<>();
+        Cursor cursor = db.rawQuery("SELECT * FROM " + TABLE_RECIPE_INGREDIENTS +
+                " WHERE " + COLUMN_RI_RECIPE_ID + " = ?", new String[]{String.valueOf(recipeId)});
+        if (cursor.moveToFirst()) {
+            do {
+                String name = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_RI_ING_NAME));
+                double qty = cursor.getDouble(cursor.getColumnIndexOrThrow(COLUMN_RI_QTY));
+                String unit = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_RI_UNIT));
+                list.add(new RecipeIngredient(name, qty, unit));
+            } while (cursor.moveToNext());
+        }
+        cursor.close();
+        return list;
     }
 }
